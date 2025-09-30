@@ -11,6 +11,8 @@ import psutil
 import sys
 import time
 import logging
+import os
+import struct
 from typing import Optional
 
 # Windows constants
@@ -28,6 +30,75 @@ class DLLInjector:
     def __init__(self):
         self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
         self.psapi = ctypes.WinDLL('psapi', use_last_error=True)
+
+    def clear_screen(self):
+        """Clear the console screen"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    def get_process_architecture(self, process: psutil.Process) -> str:
+        """Get process architecture (32-bit or 64-bit)"""
+        try:
+            # Check if process is 32-bit or 64-bit
+            is_32bit = process.is_32bit if hasattr(process, 'is_32bit') else None
+
+            if is_32bit is None:
+                # Fallback: check process handle
+                h_process = self.kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, process.pid)
+                if h_process:
+                    # Use IsWow64Process to determine if 32-bit process on 64-bit system
+                    is_wow64 = ctypes.c_bool()
+                    if hasattr(self.kernel32, 'IsWow64Process'):
+                        self.kernel32.IsWow64Process(h_process, ctypes.byref(is_wow64))
+                        self.kernel32.CloseHandle(h_process)
+                        return "32-bit" if is_wow64.value else "64-bit"
+                self.kernel32.CloseHandle(h_process)
+                return "Unknown"
+            else:
+                return "32-bit" if is_32bit else "64-bit"
+        except Exception as e:
+            logger.warning(f"Could not determine process architecture: {e}")
+            return "Unknown"
+
+    def get_dll_architecture(self, dll_path: str) -> str:
+        """Get DLL architecture by reading PE header"""
+        try:
+            with open(dll_path, 'rb') as f:
+                # Read DOS header
+                dos_header = f.read(64)
+                if len(dos_header) < 64:
+                    return "Invalid DLL"
+
+                # Check DOS signature
+                if dos_header[:2] != b'MZ':
+                    return "Not a PE file"
+
+                # Get PE header offset
+                pe_offset = struct.unpack('<L', dos_header[60:64])[0]
+                f.seek(pe_offset)
+
+                # Read PE signature
+                pe_header = f.read(24)
+                if pe_header[:4] != b'PE\x00\x00':
+                    return "Not a PE file"
+
+                # Read machine type (offset 4 in PE header)
+                machine_type = struct.unpack('<H', pe_header[4:6])[0]
+
+                # Machine type values:
+                # 0x014c = IMAGE_FILE_MACHINE_I386 (32-bit)
+                # 0x0200 = IMAGE_FILE_MACHINE_IA64 (Itanium 64-bit)
+                # 0x8664 = IMAGE_FILE_MACHINE_AMD64 (x64 64-bit)
+
+                if machine_type == 0x014c:
+                    return "32-bit"
+                elif machine_type in (0x0200, 0x8664):
+                    return "64-bit"
+                else:
+                    return f"Unknown (0x{machine_type:04X})"
+
+        except Exception as e:
+            logger.warning(f"Could not determine DLL architecture: {e}")
+            return "Unknown"
 
         # Define function signatures
         self.kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -174,6 +245,10 @@ class DLLInjector:
         return True
 
 def main():
+    # Clear screen at startup
+    injector = DLLInjector()
+    injector.clear_screen()
+
     parser = argparse.ArgumentParser(description='DLL Injector for Windows')
     parser.add_argument('-f', '--file', required=True, help='Path to DLL file to inject')
     group = parser.add_mutually_exclusive_group(required=True)
@@ -194,7 +269,14 @@ def main():
         logger.error(f"Error accessing DLL file: {e}")
         sys.exit(1)
 
+    logger.info("=" * 60)
+    logger.info("DLL INJECTOR STARTED")
+    logger.info("=" * 60)
     logger.info(f"Target DLL: {dll_path}")
+
+    # Log DLL architecture
+    dll_arch = injector.get_dll_architecture(dll_path)
+    logger.info(f"DLL Architecture: {dll_arch}")
 
     injector = DLLInjector()
 
@@ -220,14 +302,38 @@ def main():
             logger.error(f"Could not find process '{process_name}'")
             sys.exit(1)
 
+    # Log process architecture information
+    logger.info(f"Target Process: {target_process.name()} (PID: {target_process.pid})")
+    process_arch = injector.get_process_architecture(target_process)
+    logger.info(f"Process Architecture: {process_arch}")
+
+    # Log architecture compatibility warning if needed
+    if dll_arch != "Unknown" and process_arch != "Unknown":
+        if dll_arch != process_arch:
+            logger.warning(f"Architecture MISMATCH: DLL is {dll_arch} but process is {process_arch}")
+            logger.warning("Injection may fail due to architecture incompatibility!")
+        else:
+            logger.info(f"Architecture MATCH: Both DLL and process are {dll_arch}")
+
     # Perform injection
+    logger.info("-" * 60)
+    logger.info("STARTING DLL INJECTION...")
+    logger.info("-" * 60)
+
     success = injector.inject_dll(target_process, dll_path)
 
+    logger.info("-" * 60)
     if success:
-        logger.info("DLL injection completed successfully!")
+        logger.info("✓ DLL INJECTION COMPLETED SUCCESSFULLY!")
+        logger.info(f"✓ DLL: {dll_path} ({dll_arch})")
+        logger.info(f"✓ Process: {target_process.name()} (PID: {target_process.pid}, {process_arch})")
+        logger.info("-" * 60)
         sys.exit(0)
     else:
-        logger.error("DLL injection failed!")
+        logger.error("✗ DLL INJECTION FAILED!")
+        logger.error(f"✗ DLL: {dll_path} ({dll_arch})")
+        logger.error(f"✗ Process: {target_process.name()} (PID: {target_process.pid}, {process_arch})")
+        logger.error("-" * 60)
         sys.exit(1)
 
 if __name__ == "__main__":
