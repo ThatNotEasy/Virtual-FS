@@ -189,26 +189,3 @@ cmake --build . --config Release
 ## 📝 License
 
 This project is provided as-is for educational and research purposes. Users are responsible for compliance with applicable laws and regulations.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📞 Support
-
-For issues and questions:
-1. Check existing documentation
-2. Review error logs and debug output
-3. Test with minimal configurations
-4. Report bugs with detailed system information
-
----
-
-**Project Version**: 1.0.0
-**Last Updated**: 2024
-**Platform**: Windows 10/11
-**Architecture**: 32-bit and 64-bit compatible
